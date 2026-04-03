@@ -146,41 +146,70 @@ def load_data():
 df = load_data()
 
 # ─────────────────────────────────────────────
-#  TRAIN MODEL  (cached — runs only once)
+#  CLEAN DATA & TRAIN MODEL  (cached)
 # ─────────────────────────────────────────────
 @st.cache_resource
 def train_models(data):
-    X = data[['marks', 'year']]
-    y = data['rank']
+    # ── Data Cleaning ──
+    # Remove anomalous Rank=1 entries (data errors where mid-range marks get rank 1)
+    clean = data.copy()
+    clean = clean[clean['rank'] > 0]
+    # Remove rows where percentile is exactly 100 and rank is 1 (clearly erroneous)
+    clean = clean[~((clean['percentile'] == 100.0) & (clean['rank'] == 1))]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    # ── Feature Engineering ──
+    # Log-transform rank to linearise the exponential marks→rank relationship
+    clean['log_rank'] = np.log1p(clean['rank'])
+
+    # Build features: marks, year, total_candidates
+    feature_cols = ['marks', 'year']
+    if 'total_candidates' in clean.columns:
+        feature_cols.append('total_candidates')
+
+    X = clean[feature_cols]
+    y_log = clean['log_rank']          # predict in log space
+    y_raw = clean['rank']              # keep for display metrics
+
+    X_train, X_test, y_log_train, y_log_test, y_raw_train, y_raw_test = train_test_split(
+        X, y_log, y_raw, test_size=0.2, random_state=42
     )
 
-    # Linear
+    # ── Linear Regression (in log-rank space) ──
     lin = LinearRegression()
-    lin.fit(X_train, y_train)
-    y_pred_lin = lin.predict(X_test)
+    lin.fit(X_train, y_log_train)
+    y_pred_lin_log = lin.predict(X_test)
+    y_pred_lin = np.expm1(y_pred_lin_log)          # back to original scale
+    y_pred_lin = np.clip(y_pred_lin, 1, None)
 
-    # Polynomial (degree 2)
-    poly = PolynomialFeatures(degree=2)
+    # ── Polynomial Regression degree 3 (in log-rank space) ──
+    poly = PolynomialFeatures(degree=3, include_bias=False)
     X_poly_train = poly.fit_transform(X_train)
     X_poly_test  = poly.transform(X_test)
     pol = LinearRegression()
-    pol.fit(X_poly_train, y_train)
-    y_pred_pol = pol.predict(X_poly_test)
+    pol.fit(X_poly_train, y_log_train)
+    y_pred_pol_log = pol.predict(X_poly_test)
+    y_pred_pol = np.expm1(y_pred_pol_log)           # back to original scale
+    y_pred_pol = np.clip(y_pred_pol, 1, None)
 
+    # ── Metrics (evaluated on original rank scale) ──
+    y_test_vals = y_raw_test.values
     metrics = {
-        "lin_r2":  r2_score(y_test, y_pred_lin),
-        "lin_mae": mean_absolute_error(y_test, y_pred_lin),
-        "pol_r2":  r2_score(y_test, y_pred_pol),
-        "pol_mae": mean_absolute_error(y_test, y_pred_pol),
+        "lin_r2":  r2_score(y_test_vals, y_pred_lin),
+        "lin_mae": mean_absolute_error(y_test_vals, y_pred_lin),
+        "pol_r2":  r2_score(y_test_vals, y_pred_pol),
+        "pol_mae": mean_absolute_error(y_test_vals, y_pred_pol),
     }
-    residuals = {"lin": y_test.values - y_pred_lin, "pol": y_test.values - y_pred_pol}
-    y_test_vals = y_test.values
-    return lin, pol, poly, metrics, residuals, y_test_vals, y_pred_lin, y_pred_pol
+    residuals = {
+        "lin": y_test_vals - y_pred_lin,
+        "pol": y_test_vals - y_pred_pol,
+    }
 
-lin_model, poly_model, poly_feat, metrics, residuals, y_test, y_pred_lin, y_pred_poly = train_models(df)
+    # Store feature columns for prediction
+    meta = {"feature_cols": feature_cols, "clean": clean}
+
+    return lin, pol, poly, metrics, residuals, y_test_vals, y_pred_lin, y_pred_pol, meta
+
+lin_model, poly_model, poly_feat, metrics, residuals, y_test, y_pred_lin, y_pred_poly, model_meta = train_models(df)
 
 # ─────────────────────────────────────────────
 #  PLOT THEME HELPER
@@ -217,7 +246,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-#  TABS  (all visible without nav change)
+#  TABS
 # ─────────────────────────────────────────────
 tab_eda, tab_insights, tab_model, tab_predict = st.tabs(
     ["📋 EDA", "📈 Insights", "🤖 Model", "🎯 Predict"]
@@ -312,7 +341,7 @@ with tab_insights:
         st.markdown("""
         <div class="insight-pill">
         ↳ Strong inverse relationship — more marks means a better (lower) rank.<br>
-        ↳ The curve is non-linear: every extra mark in the 280–360 range moves the rank dramatically.<br>
+        ↳ The curve is non-linear: every extra mark in the 200–300 range moves the rank dramatically.<br>
         ↳ Colours show no obvious year-to-year drift in the pattern.
         </div>""", unsafe_allow_html=True)
 
@@ -392,6 +421,15 @@ with tab_insights:
 with tab_model:
     st.markdown('<div class="sec-title">Model Performance</div>', unsafe_allow_html=True)
 
+    st.markdown("""
+    <div class="insight-pill">
+    <strong>How the model works:</strong> Instead of predicting rank directly, we predict <code>log(rank)</code> 
+    and then convert back. This is because the marks→rank curve is exponential — a small change 
+    in high marks causes a huge rank change. Log-transform linearises this, dramatically improving accuracy.
+    Anomalous data (Rank=1 with mid-range marks) has been removed.
+    </div>
+    """, unsafe_allow_html=True)
+
     # Metric cards
     st.markdown(f"""
     <div class="kpi-row">
@@ -421,7 +459,7 @@ with tab_model:
         plt.close(fig)
 
     with m2:
-        st.markdown("**Actual vs Predicted — Polynomial**")
+        st.markdown("**Actual vs Predicted — Polynomial (deg 3)**")
         fig, ax = dark_fig(figsize=(5.5, 4))
         ax.scatter(y_test, y_pred_poly, alpha=0.4, s=10, color=ACCENT2, label="Predictions")
         lims = [min(y_test.min(), y_pred_poly.min()), max(y_test.max(), y_pred_poly.max())]
@@ -507,9 +545,12 @@ with tab_predict:
 
     p_col, r_col = st.columns([1, 1.2], gap="large")
 
+    # Lookup the total_candidates for the selected year from the data
+    year_candidates_map = df.groupby('year')['total_candidates'].first().to_dict() if 'total_candidates' in df.columns else {}
+
     with p_col:
         marks_input = st.slider(
-            "📝 Marks (out of 360)", min_value=0.0, max_value=360.0,
+            "📝 Marks (out of 300)", min_value=0.0, max_value=300.0,
             value=150.0, step=0.5,
         )
         year_input = st.slider(
@@ -517,10 +558,21 @@ with tab_predict:
             value=2024, step=1,
         )
 
-        # Live prediction on slider change (no button needed)
-        inp = np.array([[marks_input, year_input]])
-        lin_pred  = int(np.clip(lin_model.predict(inp)[0], 1, None))
-        poly_pred = int(np.clip(poly_model.predict(poly_feat.transform(inp))[0], 1, None))
+        # Build input with the same features used during training
+        feature_cols = model_meta["feature_cols"]
+        inp_dict = {'marks': marks_input, 'year': year_input}
+        if 'total_candidates' in feature_cols:
+            # Use known total_candidates for this year, or extrapolate
+            tc = year_candidates_map.get(year_input, 1400000)  # default to latest known
+            inp_dict['total_candidates'] = tc
+        inp = pd.DataFrame([inp_dict])[feature_cols]
+
+        # Predict in log space, then convert back
+        lin_pred_log  = lin_model.predict(inp)[0]
+        lin_pred = int(np.clip(np.expm1(lin_pred_log), 1, None))
+
+        poly_pred_log = poly_model.predict(poly_feat.transform(inp))[0]
+        poly_pred = int(np.clip(np.expm1(poly_pred_log), 1, None))
 
         st.markdown(f"""
         <div class="pred-box linear">
@@ -528,7 +580,7 @@ with tab_predict:
           <div class="pred-val">{lin_pred:,}</div>
         </div>
         <div class="pred-box poly">
-          <div class="pred-label">🟣 Polynomial Regression</div>
+          <div class="pred-label">🟣 Polynomial Regression (deg 3)</div>
           <div class="pred-val">{poly_pred:,}</div>
         </div>
         """, unsafe_allow_html=True)
