@@ -1,1091 +1,694 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import seaborn as sns
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score, mean_absolute_error
-import plotly.graph_objects as go
-import plotly.express as px
+# ============================================================
+#  JEE RANK PREDICTOR — Streamlit Frontend (app.py)
+#  Converted from JeeRankprediction.ipynb
+# ============================================================
+#
+# HOW TO RUN:
+#   pip install streamlit pandas numpy scikit-learn xgboost imbalanced-learn plotly seaborn matplotlib
+#   streamlit run app.py
+#
+# DATASET REQUIRED:
+#   Place  jee_marks_percentile_rank_2009_2026.csv  in the same folder as app.py
+# ============================================================
 
-# ─────────────────────────────────────────────
-# PAGE CONFIG
-# ─────────────────────────────────────────────
+# ── 1. IMPORTS ───────────────────────────────────────────────
+# Standard scientific Python stack
+import numpy as np                        # Numerical computing (arrays, log transforms)
+import pandas as pd                       # Tabular data handling (DataFrame)
+import matplotlib.pyplot as plt           # Static plotting backend (used by seaborn)
+import seaborn as sns                     # High-level statistical plots (boxplots, kde, heatmaps)
+import plotly.express as px               # Interactive plots rendered inside Streamlit
+import warnings
+warnings.filterwarnings('ignore')         # Suppress non-critical sklearn/xgboost warnings
+
+# Streamlit — turns a Python script into a web application
+import streamlit as st
+
+# Sklearn utilities
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures, LabelEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import (
+    mean_absolute_error, mean_squared_error, r2_score,
+    accuracy_score, classification_report
+)
+from sklearn.svm import SVC                # Support Vector Classifier
+
+# XGBoost — gradient-boosted trees for classification
+from xgboost import XGBClassifier
+
+# SMOTE — Synthetic Minority Over-sampling to handle class imbalance
+from imblearn.over_sampling import SMOTE
+
+
+# ── 2. PAGE CONFIG ───────────────────────────────────────────
+# Must be the FIRST Streamlit call; sets tab title, icon, and layout
 st.set_page_config(
     page_title="JEE Rank Predictor",
     page_icon="🎯",
-    layout="wide",
+    layout="wide",           # Uses full browser width
     initial_sidebar_state="expanded"
 )
 
-# ─────────────────────────────────────────────
-# CUSTOM CSS — PREMIUM DARK THEME
-# ─────────────────────────────────────────────
+# ── 3. CUSTOM CSS ────────────────────────────────────────────
+# Inject raw CSS into the page for branding and aesthetics
 st.markdown("""
 <style>
-    /* ── Import Google Fonts ── */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap');
 
-    /* ── Root Variables ── */
-    :root {
-        --bg-primary: #0a0a0f;
-        --bg-secondary: #12121a;
-        --bg-card: rgba(18, 18, 30, 0.7);
-        --bg-card-hover: rgba(25, 25, 40, 0.85);
-        --border-color: rgba(255, 255, 255, 0.06);
-        --border-glow: rgba(99, 102, 241, 0.3);
-        --text-primary: #f0f0f5;
-        --text-secondary: #8b8b9e;
-        --text-muted: #5a5a6e;
-        --accent-indigo: #6366f1;
-        --accent-violet: #8b5cf6;
-        --accent-cyan: #06b6d4;
-        --accent-emerald: #10b981;
-        --accent-rose: #f43f5e;
-        --accent-amber: #f59e0b;
-        --gradient-primary: linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7);
-        --gradient-cyan: linear-gradient(135deg, #06b6d4, #0891b2);
-        --gradient-emerald: linear-gradient(135deg, #10b981, #059669);
-        --gradient-rose: linear-gradient(135deg, #f43f5e, #e11d48);
-        --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.4);
-        --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
-        --radius-lg: 16px;
-        --radius-xl: 24px;
+    /* Global font override */
+    html, body, [class*="css"] {
+        font-family: 'DM Sans', sans-serif;
     }
 
-    /* ── Global Styles ── */
-    .stApp {
-        background: var(--bg-primary) !important;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-        color: var(--text-primary) !important;
-    }
-
-    .stApp > header {
-        background: transparent !important;
-    }
-
-    /* ── Main Content Area ── */
-    .main .block-container {
-        padding: 2rem 3rem !important;
-        max-width: 1400px !important;
-    }
-
-    /* ── Sidebar ── */
-    section[data-testid="stSidebar"] {
-        background: var(--bg-secondary) !important;
-        border-right: 1px solid var(--border-color) !important;
-    }
-
-    section[data-testid="stSidebar"] .block-container {
-        padding: 2rem 1.5rem !important;
-    }
-
-    section[data-testid="stSidebar"] [data-testid="stMarkdown"] p,
-    section[data-testid="stSidebar"] [data-testid="stMarkdown"] li {
-        color: var(--text-secondary) !important;
-        font-size: 0.9rem !important;
-    }
-
-    /* ── Typography ── */
-    h1 {
-        font-family: 'Inter', sans-serif !important;
-        font-weight: 800 !important;
-        letter-spacing: -0.03em !important;
-        color: var(--text-primary) !important;
-    }
-
-    h2, h3 {
-        font-family: 'Inter', sans-serif !important;
-        font-weight: 700 !important;
-        letter-spacing: -0.02em !important;
-        color: var(--text-primary) !important;
-    }
-
-    p, li, span {
-        font-family: 'Inter', sans-serif !important;
-    }
-
-    /* ── Slider Styles ── */
-    .stSlider > div > div {
-        background: transparent !important;
-    }
-
-    .stSlider [data-testid="stTickBar"] {
-        background: rgba(99, 102, 241, 0.1) !important;
-    }
-
-    div[data-testid="stSlider"] label {
-        color: var(--text-secondary) !important;
-        font-weight: 500 !important;
-        font-size: 0.95rem !important;
-    }
-
-    .stSlider > div > div > div[role="slider"] {
-        background: var(--accent-indigo) !important;
-        border: 2px solid rgba(255, 255, 255, 0.2) !important;
-        box-shadow: 0 0 16px rgba(99, 102, 241, 0.5) !important;
-    }
-
-    /* ── Metric Cards ── */
-    div[data-testid="stMetric"] {
-        background: var(--bg-card) !important;
-        border: 1px solid var(--border-color) !important;
-        border-radius: var(--radius-lg) !important;
-        padding: 1.5rem !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        box-shadow: var(--shadow-lg) !important;
-    }
-
-    div[data-testid="stMetric"]:hover {
-        border-color: var(--border-glow) !important;
-        box-shadow: var(--shadow-glow) !important;
-        transform: translateY(-2px) !important;
-    }
-
-    div[data-testid="stMetric"] label {
-        color: var(--text-secondary) !important;
-        font-weight: 600 !important;
-        font-size: 0.85rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.08em !important;
-    }
-
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-family: 'JetBrains Mono', monospace !important;
-        font-weight: 700 !important;
-        font-size: 2rem !important;
-        background: var(--gradient-primary) !important;
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        background-clip: text !important;
-    }
-
-    /* ── Tabs ── */
-    .stTabs [data-baseweb="tab-list"] {
-        background: var(--bg-secondary) !important;
-        border-radius: 12px !important;
-        padding: 4px !important;
-        gap: 4px !important;
-        border: 1px solid var(--border-color) !important;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        background: transparent !important;
-        color: var(--text-secondary) !important;
-        border-radius: 8px !important;
-        font-weight: 500 !important;
-        font-size: 0.9rem !important;
-        padding: 0.6rem 1.2rem !important;
-        border: none !important;
-        transition: all 0.2s ease !important;
-    }
-
-    .stTabs [aria-selected="true"] {
-        background: var(--accent-indigo) !important;
-        color: white !important;
-        font-weight: 600 !important;
-    }
-
-    .stTabs [data-baseweb="tab-highlight"] {
-        display: none !important;
-    }
-
-    .stTabs [data-baseweb="tab-border"] {
-        display: none !important;
-    }
-
-    /* ── Expander ── */
-    .streamlit-expanderHeader {
-        background: var(--bg-card) !important;
-        border: 1px solid var(--border-color) !important;
-        border-radius: var(--radius-lg) !important;
-        color: var(--text-primary) !important;
-        font-weight: 600 !important;
-    }
-
-    /* ── Divider ── */
-    hr {
-        border-color: var(--border-color) !important;
-        margin: 2rem 0 !important;
-    }
-
-    /* ── Select Box / Number Input ── */
-    .stSelectbox > div > div,
-    .stNumberInput > div > div > input {
-        background: var(--bg-secondary) !important;
-        border: 1px solid var(--border-color) !important;
-        border-radius: 10px !important;
-        color: var(--text-primary) !important;
-    }
-
-    /* ── Custom Animated Background Orbs ── */
-    .hero-section {
-        position: relative;
-        padding: 2rem 0 1rem 0;
-        overflow: hidden;
-    }
-
-    .hero-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(99, 102, 241, 0.12);
-        border: 1px solid rgba(99, 102, 241, 0.25);
-        border-radius: 999px;
-        padding: 6px 16px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: #a5b4fc;
-        letter-spacing: 0.04em;
-        margin-bottom: 1rem;
-        animation: fadeInUp 0.6s ease;
-    }
-
+    /* Hero header */
     .hero-title {
+        font-family: 'Syne', sans-serif;
         font-size: 3rem;
-        font-weight: 900;
-        letter-spacing: -0.04em;
-        line-height: 1.1;
-        margin-bottom: 0.5rem;
-        background: linear-gradient(135deg, #f0f0f5 0%, #a5b4fc 50%, #8b5cf6 100%);
+        font-weight: 800;
+        background: linear-gradient(135deg, #FF6B35, #F7C59F, #EFEFD0);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        background-clip: text;
-        animation: fadeInUp 0.6s ease 0.1s both;
+        margin-bottom: 0;
+    }
+    .hero-sub {
+        color: #888;
+        font-size: 1.05rem;
+        margin-top: 4px;
+        font-weight: 300;
     }
 
-    .hero-subtitle {
-        font-size: 1.1rem;
-        color: var(--text-secondary);
-        font-weight: 400;
-        line-height: 1.6;
-        max-width: 600px;
-        animation: fadeInUp 0.6s ease 0.2s both;
-    }
-
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* ── Glass Card ── */
-    .glass-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: var(--radius-xl);
-        padding: 2rem;
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        box-shadow: var(--shadow-lg);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        animation: fadeInUp 0.5s ease;
-    }
-
-    .glass-card:hover {
-        border-color: var(--border-glow);
-        box-shadow: var(--shadow-glow);
-    }
-
-    /* ── Prediction Cards ── */
-    .pred-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: var(--radius-xl);
-        padding: 1.8rem;
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        box-shadow: var(--shadow-lg);
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        position: relative;
-        overflow: hidden;
-    }
-
-    .pred-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 3px;
-        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    }
-
-    .pred-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
-    }
-
-    .pred-card.indigo::before { background: var(--gradient-primary); }
-    .pred-card.cyan::before { background: var(--gradient-cyan); }
-    .pred-card.emerald::before { background: var(--gradient-emerald); }
-    .pred-card.rose::before { background: var(--gradient-rose); }
-
-    .pred-label {
-        font-size: 0.75rem;
+    /* Section headers */
+    .section-head {
+        font-family: 'Syne', sans-serif;
+        font-size: 1.5rem;
         font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin-bottom: 0.3rem;
+        color: #FF6B35;
+        border-left: 4px solid #FF6B35;
+        padding-left: 12px;
+        margin-top: 2rem;
     }
 
-    .pred-label.indigo { color: #a5b4fc; }
-    .pred-label.cyan { color: #67e8f9; }
-    .pred-label.emerald { color: #6ee7b7; }
-    .pred-label.rose { color: #fda4af; }
-
-    .pred-value {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 2.2rem;
+    /* Metric cards */
+    .metric-card {
+        background: #1a1a2e;
+        border: 1px solid #2a2a4a;
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+    .metric-value {
+        font-family: 'Syne', sans-serif;
+        font-size: 2rem;
         font-weight: 800;
-        color: var(--text-primary);
-        line-height: 1;
-        margin-bottom: 0.3rem;
+        color: #FF6B35;
     }
-
-    .pred-sub {
+    .metric-label {
+        color: #aaa;
         font-size: 0.85rem;
-        color: var(--text-muted);
-        font-weight: 400;
+        margin-top: 4px;
     }
 
-    /* ── Metric Bar ── */
-    .metric-bar-container {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: var(--radius-lg);
-        padding: 1.2rem 1.5rem;
-        margin-bottom: 0.8rem;
+    /* Prediction result box */
+    .result-box {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 2px solid #FF6B35;
+        border-radius: 16px;
+        padding: 32px;
+        text-align: center;
+        margin-top: 1rem;
     }
-
-    .metric-bar-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.6rem;
+    .result-rank {
+        font-family: 'Syne', sans-serif;
+        font-size: 4rem;
+        font-weight: 800;
+        color: #FF6B35;
     }
-
-    .metric-bar-label {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
+    .result-range {
+        color: #F7C59F;
+        font-size: 1.1rem;
+        margin-top: 8px;
+    }
+    .result-category {
+        display: inline-block;
+        background: #FF6B35;
+        color: white;
+        border-radius: 24px;
+        padding: 6px 20px;
+        margin-top: 12px;
         font-weight: 500;
     }
 
-    .metric-bar-value {
-        font-family: 'JetBrains Mono', monospace;
-        color: var(--text-primary);
-        font-size: 0.85rem;
-        font-weight: 600;
+    /* Info/explanation boxes */
+    .explain-box {
+        background: #0f0f23;
+        border-left: 3px solid #F7C59F;
+        padding: 14px 18px;
+        border-radius: 0 8px 8px 0;
+        font-size: 0.88rem;
+        color: #ccc;
+        margin: 8px 0 16px 0;
     }
 
-    .metric-bar-track {
-        background: rgba(255, 255, 255, 0.05);
-        height: 6px;
-        border-radius: 3px;
-        overflow: hidden;
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: #0d0d1f;
     }
 
-    .metric-bar-fill {
-        height: 100%;
-        border-radius: 3px;
-        transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .metric-bar-fill.indigo { background: var(--gradient-primary); }
-    .metric-bar-fill.emerald { background: var(--gradient-emerald); }
-    .metric-bar-fill.cyan { background: var(--gradient-cyan); }
-    .metric-bar-fill.rose { background: var(--gradient-rose); }
-
-    /* ── Footer ── */
-    .footer {
-        text-align: center;
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        padding: 3rem 0 1rem 0;
-        border-top: 1px solid var(--border-color);
-        margin-top: 3rem;
-    }
-
-    .footer a {
-        color: var(--accent-indigo);
-        text-decoration: none;
-    }
-
-    /* ── Plotly Chart Container ── */
-    .js-plotly-plot .plotly .main-svg {
-        border-radius: 12px !important;
-    }
-
-    /* ── Scrollbar ── */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg-primary); }
-    ::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.3); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.5); }
-
-    /* ── Info Box ── */
-    .info-box {
-        background: rgba(99, 102, 241, 0.08);
-        border: 1px solid rgba(99, 102, 241, 0.2);
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        color: #c7d2fe;
-        font-size: 0.9rem;
-        line-height: 1.6;
-    }
-
-    /* ── Radio buttons ── */
-    .stRadio > div {
-        gap: 0.5rem !important;
-    }
-
-    .stRadio label {
-        color: var(--text-secondary) !important;
-        font-weight: 500 !important;
-    }
-
-    /* ── Hide Streamlit Branding ── */
-    #MainMenu { visibility: hidden; }
-    footer { visibility: hidden; }
-    header { visibility: hidden; }
-
-    /* ── Responsive ── */
-    @media (max-width: 768px) {
-        .hero-title { font-size: 2rem; }
-        .pred-value { font-size: 1.6rem; }
-        .main .block-container { padding: 1rem !important; }
-    }
+    /* Hide default Streamlit footer */
+    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────
-# LOAD DATA
-# ─────────────────────────────────────────────
-@st.cache_data
-def load_data():
-    df = pd.read_csv("jee_marks_percentile_rank_2009_2026.csv")
-    df.columns = df.columns.str.strip().str.lower()
-    return df
-
-df = load_data()
-
-
-# ─────────────────────────────────────────────
-# TRAIN MODELS
-# ─────────────────────────────────────────────
-@st.cache_resource
-def train_models(data):
-    clean = data.copy()
-    clean = clean[clean['rank'] > 0]
-
-    clean['log_rank'] = np.log1p(clean['rank'])
-
-    if 'percentile' not in clean.columns:
-        clean['percentile'] = 100 * (1 - clean['rank'] / clean['rank'].max())
-
-    feature_cols = ['marks', 'year']
-    if 'total_candidates' in clean.columns:
-        feature_cols.append('total_candidates')
-
-    X = clean[feature_cols]
-    y_log = clean['log_rank']
-    y_pct = clean['percentile']
-    y_raw = clean['rank']
-
-    X_train, X_test, y_log_train, y_log_test, y_pct_train, y_pct_test, y_raw_train, y_raw_test = train_test_split(
-        X, y_log, y_pct, y_raw, test_size=0.2, random_state=42
-    )
-
-    # Linear (log-rank)
-    lin = LinearRegression()
-    lin.fit(X_train, y_log_train)
-    y_pred_lin = np.expm1(lin.predict(X_test))
-
-    # Polynomial (log-rank)
-    poly = PolynomialFeatures(degree=3, include_bias=False)
-    X_poly_train = poly.fit_transform(X_train)
-    X_poly_test = poly.transform(X_test)
-
-    pol = LinearRegression()
-    pol.fit(X_poly_train, y_log_train)
-    y_pred_pol = np.expm1(pol.predict(X_poly_test))
-
-    # Percentile model
-    pct_model = LinearRegression()
-    pct_model.fit(X_train, y_pct_train)
-    y_pred_pct = pct_model.predict(X_test)
-    y_pred_pct = np.clip(y_pred_pct, 0, 100)
-
-    metrics = {
-        "lin_mae": mean_absolute_error(y_raw_test, y_pred_lin),
-        "lin_r2": r2_score(y_raw_test, y_pred_lin),
-        "pol_mae": mean_absolute_error(y_raw_test, y_pred_pol),
-        "pol_r2": r2_score(y_raw_test, y_pred_pol),
-        "pct_mae": mean_absolute_error(y_pct_test, y_pred_pct),
-        "pct_r2": r2_score(y_pct_test, y_pred_pct),
-    }
-
-    return lin, pol, poly, pct_model, metrics, feature_cols, clean
-
-lin_model, poly_model, poly_feat, pct_model, metrics, feature_cols, clean_data = train_models(df)
-
-
-# ─────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-    <div style="text-align: center; padding: 1rem 0;">
-        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🎯</div>
-        <div style="font-size: 1.1rem; font-weight: 700; color: #f0f0f5; letter-spacing: -0.02em;">JEE Rank Predictor</div>
-        <div style="font-size: 0.75rem; color: #5a5a6e; margin-top: 4px;">ML-Powered Predictions</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    st.markdown("""
-    <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: #5a5a6e; margin-bottom: 0.8rem;">
-        📝 Input Parameters
-    </div>
-    """, unsafe_allow_html=True)
-
-    marks = st.slider(
-        "🎯 Your Marks",
-        min_value=0,
-        max_value=300,
-        value=150,
-        step=1,
-        help="Enter your JEE Main marks (0–300)"
-    )
-
-    year = st.slider(
-        "📅 Exam Year",
-        min_value=2009,
-        max_value=2026,
-        value=2025,
-        step=1,
-        help="Select the JEE Main exam year"
-    )
-
-    st.markdown("---")
-
-    st.markdown("""
-    <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: #5a5a6e; margin-bottom: 0.8rem;">
-        ⚙️ Model Info
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown(f"""
-    <div class="info-box">
-        <strong>3 Models Active</strong><br>
-        <span style="color: #8b8b9e;">Linear Regression, Polynomial (deg 3), and Percentile-based models trained on <strong>{len(clean_data):,}</strong> data points from <strong>2009–2026</strong>.</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div style="font-size: 0.75rem; color: #5a5a6e; line-height: 1.7;">
-        <strong style="color: #8b8b9e;">How it works:</strong><br>
-        ① Enter your marks & year<br>
-        ② Models predict your rank<br>
-        ③ Compare across methods<br>
-        ④ Explore visual analytics
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
-# HERO SECTION
-# ─────────────────────────────────────────────
+# ── 4. HERO HEADER ───────────────────────────────────────────
+# st.markdown renders raw HTML; unsafe_allow_html is needed for custom tags
 st.markdown("""
-<div class="hero-section">
-    <div class="hero-badge">✨ ML-Powered · 3 Models · Live Predictions</div>
-    <div class="hero-title">JEE Rank Predictor</div>
-    <div class="hero-subtitle">
-        Predict your JEE Main rank using advanced machine learning models 
-        trained on 17 years of historical data (2009–2026).
+<div style="padding: 1rem 0 2rem 0;">
+    <div class="hero-title">🎯 JEE Rank Predictor</div>
+    <div class="hero-sub">
+        Predict your JEE rank using Machine Learning · Random Forest · XGBoost · SVM
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────
-# PREDICTIONS
-# ─────────────────────────────────────────────
-inp_dict = {'marks': marks, 'year': year}
-if 'total_candidates' in feature_cols:
-    inp_dict['total_candidates'] = 1400000
+# ── 5. SIDEBAR — FILE UPLOAD & INPUTS ────────────────────────
+# The sidebar stays fixed on the left while main content scrolls
+with st.sidebar:
+    st.markdown("### 📂 Load Dataset")
 
-inp = pd.DataFrame([inp_dict])[feature_cols]
+    # File uploader widget — accepts only CSV files
+    # Returns a UploadedFile object or None
+    uploaded_file = st.file_uploader(
+        "Upload jee_marks_percentile_rank_2009_2026.csv",
+        type=["csv"]
+    )
 
-lin_pred = max(1, int(np.expm1(lin_model.predict(inp))[0]))
-poly_pred = max(1, int(np.expm1(poly_model.predict(poly_feat.transform(inp)))[0]))
-pct_pred = float(np.clip(pct_model.predict(inp)[0], 0, 100))
-rank_from_pct = max(1, int((100 - pct_pred) / 100 * 1400000))
+    st.markdown("---")
+    st.markdown("### 🔮 Make a Prediction")
 
-avg_rank = int(np.mean([lin_pred, poly_pred, rank_from_pct]))
+    # Number input: marks scored in JEE (0–360)
+    input_marks = st.number_input(
+        "Marks Scored", min_value=0.0, max_value=360.0, value=150.0, step=0.5
+    )
+
+    # Select box for JEE year (common years in dataset)
+    input_year = st.selectbox(
+        "JEE Year", options=list(range(2009, 2027)), index=15
+    )
+
+    # Number input for total candidates appearing that year
+    input_candidates = st.number_input(
+        "Total Candidates", min_value=100000, max_value=1600000,
+        value=1200000, step=10000
+    )
+
+    # Button triggers model training + prediction
+    predict_btn = st.button("🚀 Predict My Rank", use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### 📋 Navigation")
+    # Radio acts as a page/tab selector stored in session state
+    page = st.radio(
+        "Go to section",
+        ["🏠 Overview", "📊 EDA", "🤖 Models", "🏆 Results"]
+    )
 
 
-# ─────────────────────────────────────────────
-# PREDICTION CARDS
-# ─────────────────────────────────────────────
-st.markdown("<br>", unsafe_allow_html=True)
+# ── 6. DATA LOADING & CACHING ────────────────────────────────
+# @st.cache_data memoises the function: runs once, then reuses output
+# This prevents reloading CSV on every Streamlit rerun
+@st.cache_data
+def load_data(file):
+    """Load CSV from uploaded file object or path string."""
+    return pd.read_csv(file)
 
-c1, c2, c3, c4 = st.columns(4)
 
-with c1:
-    st.markdown(f"""
-    <div class="pred-card indigo">
-        <div class="pred-label indigo">Linear Model</div>
-        <div class="pred-value">{lin_pred:,}</div>
-        <div class="pred-sub">Estimated Rank</div>
+# ── 7. FEATURE ENGINEERING ───────────────────────────────────
+def rank_ratio(dataframe):
+    """
+    Add RankRatio column = Rank / Total_Candidates.
+    Normalises rank across years with different candidate pools.
+    A ratio of 0.001 means top 0.1% regardless of year.
+    """
+    dataframe['RankRatio'] = dataframe['Rank'] / dataframe['Total_Candidates']
+    return dataframe
+
+
+def get_category(ratio):
+    """
+    Convert a numeric RankRatio into a human-readable performance tier.
+    Used as the target variable for classification models.
+    """
+    if ratio <= 0.005:
+        return 'Elite (Top 0.5%)'
+    elif ratio <= 0.02:
+        return 'Top Tier (0.5% - 2%)'
+    elif ratio <= 0.05:
+        return 'Highly Competitive (2% - 5%)'
+    elif ratio <= 0.10:
+        return 'Competitive (5% - 10%)'
+    else:
+        return 'Not Prepared (>10%)'
+
+
+# ── 8. MODEL TRAINING ────────────────────────────────────────
+# Cache the trained models so they're not retrained on every interaction
+@st.cache_resource
+def train_models(df):
+    """
+    Full ML pipeline:
+      1. Feature engineering (RankRatio, Category)
+      2. Regression  → predict exact rank (log-transformed target)
+      3. Classification → predict performance tier
+    Returns all fitted objects needed for inference.
+    """
+
+    # --- 8a. Feature engineering ---
+    df = rank_ratio(df.copy())
+    df['Category'] = df['RankRatio'].apply(get_category)
+
+    # --- 8b. Regression setup ---
+    # X drops derived/target columns; Y is log1p(Rank) to reduce skewness
+    X = df.drop(['RankRatio', 'Category', 'Rank', 'Percentile'], axis=1)
+    Y = np.log1p(df["Rank"])              # log(1 + Rank) → makes distribution more normal
+
+    # StandardScaler: zero-mean, unit-variance normalisation
+    # fit_transform on train; only transform on test (avoids data leakage)
+    sc = StandardScaler()
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X, Y, test_size=0.2, random_state=42   # 80/20 split, reproducible seed
+    )
+    X_train_sc = sc.fit_transform(X_train)      # Fit scaler on train set only
+    X_test_sc  = sc.transform(X_test)           # Apply same scale to test set
+
+    # --- 8c. Polynomial Linear Regression (degree=3) ---
+    # PolynomialFeatures adds interaction terms: x1², x2², x1·x2, etc.
+    poly = PolynomialFeatures(degree=3)
+    X_train_poly = poly.fit_transform(X_train_sc)
+    X_test_poly  = poly.transform(X_test_sc)
+
+    lr = LinearRegression()
+    lr.fit(X_train_poly, Y_train)               # Fit on polynomial-expanded features
+    y_lr_pred = np.expm1(lr.predict(X_test_poly))  # Inverse log transform
+
+    # --- 8d. Random Forest Regressor ---
+    # 300 trees; max_depth=5 prevents overfitting; min_samples_leaf=5 smooths predictions
+    rf_reg = RandomForestRegressor(
+        n_estimators=300, max_depth=5,
+        min_samples_split=3, min_samples_leaf=5, random_state=42
+    )
+    rf_reg.fit(X_train_sc, Y_train)
+    y_rf_pred = np.expm1(rf_reg.predict(X_test_sc))
+    y_test_orig = np.expm1(Y_test)              # Convert test labels back to original rank
+
+    # --- 8e. Regression metrics ---
+    r2_lr  = r2_score(y_test_orig, y_lr_pred)
+    r2_rf  = r2_score(y_test_orig, y_rf_pred)
+
+    n, p_lr = len(y_test_orig), X_test_poly.shape[1]
+    p_rf    = X_test_sc.shape[1]
+
+    # Adjusted R² penalises adding too many features (corrects R² for model complexity)
+    adj_r2_lr = 1 - (1 - r2_lr) * (n - 1) / (n - p_lr - 1)
+    adj_r2_rf = 1 - (1 - r2_rf) * (n - 1) / (n - p_rf - 1)
+
+    mae_lr  = mean_absolute_error(y_test_orig, y_lr_pred)
+    rmse_lr = np.sqrt(mean_squared_error(y_test_orig, y_lr_pred))
+    mae_rf  = mean_absolute_error(y_test_orig, y_rf_pred)
+    rmse_rf = np.sqrt(mean_squared_error(y_test_orig, y_rf_pred))
+
+    # --- 8f. Prediction interval via tree percentiles ---
+    # Collect individual tree predictions to estimate uncertainty range (10th–90th pct)
+    all_preds_test = np.array([tree.predict(X_test_sc) for tree in rf_reg.estimators_])
+    lower = np.expm1(np.percentile(all_preds_test, 10, axis=0))
+    upper = np.expm1(np.percentile(all_preds_test, 90, axis=0))
+    coverage = np.mean((y_test_orig >= lower) & (y_test_orig <= upper))
+
+    # --- 8g. Classification setup ---
+    # Predict performance category from Year + Marks + Rank (no Percentile leakage)
+    X2 = df.drop(columns=['Percentile', 'RankRatio', 'Category', 'Total_Candidates'])
+    Y2 = df['Category']
+
+    # LabelEncoder converts string labels → integers (required by XGBoost)
+    encoder = LabelEncoder()
+    Y2_enc = encoder.fit_transform(Y2)
+
+    X_train2, X_test2, Y_train2, Y_test2 = train_test_split(
+        X2, Y2_enc, test_size=0.2, random_state=42
+    )
+    sc2 = StandardScaler()
+    X_train2_sc = sc2.fit_transform(X_train2)
+    X_test2_sc  = sc2.transform(X_test2)
+
+    # SMOTE generates synthetic minority-class samples to balance training data
+    smote = SMOTE(random_state=42)
+    X_train2_res, Y_train2_res = smote.fit_resample(X_train2_sc, Y_train2)
+
+    # --- 8h. XGBoost Classifier ---
+    # learning_rate=0.02 (slow, careful); max_depth=3 (shallow → less overfit)
+    xgb = XGBClassifier(
+        n_estimators=200, learning_rate=0.02,
+        max_depth=3, subsample=0.8, random_state=42, eval_metric='logloss'
+    )
+    xgb.fit(X_train2_res, Y_train2_res)
+    y_xgb_pred = xgb.predict(X_test2_sc)
+
+    # --- 8i. SVM Classifier ---
+    # RBF kernel handles non-linear boundaries; C=1 balances margin vs misclassification
+    svc = SVC(kernel='rbf', C=1, gamma='scale')
+    svc.fit(X_train2_res, Y_train2_res)
+    y_svc_pred = svc.predict(X_test2_sc)
+
+    # --- 8j. Random Forest Classifier ---
+    rf_clf = RandomForestClassifier(
+        n_estimators=25, max_depth=4, min_samples_leaf=4, random_state=42
+    )
+    rf_clf.fit(X_train2_res, Y_train2_res)
+    y_rf_clf_pred = rf_clf.predict(X_test2_sc)
+
+    # Pack everything into a dict for easy access in the UI
+    return {
+        # Fitted objects needed for new predictions
+        "sc_reg": sc,
+        "sc_clf": sc2,
+        "rf_reg": rf_reg,
+        "xgb": xgb,
+        "encoder": encoder,
+
+        # Regression metrics
+        "reg_comparison": pd.DataFrame({
+            "Model": ["Polynomial LR (deg=3)", "Random Forest Regressor"],
+            "R² Score": [round(r2_lr, 4), round(r2_rf, 4)],
+            "Adj R²": [round(adj_r2_lr, 4), round(adj_r2_rf, 4)],
+            "MAE": [round(mae_lr, 2), round(mae_rf, 2)],
+            "RMSE": [round(rmse_lr, 2), round(rmse_rf, 2)],
+            "Coverage (10-90%)": [round(coverage, 4), "—"],
+        }),
+
+        # Classification metrics
+        "clf_comparison": pd.DataFrame({
+            "Model": ["XGBoost", "SVM (RBF)", "Random Forest"],
+            "Accuracy": [
+                round(accuracy_score(Y_test2, y_xgb_pred), 4),
+                round(accuracy_score(Y_test2, y_svc_pred), 4),
+                round(accuracy_score(Y_test2, y_rf_clf_pred), 4),
+            ],
+        }),
+
+        # Raw predictions & true values for charts
+        "y_test":   y_test_orig,
+        "y_rf_pred": y_rf_pred,
+        "df": df,
+    }
+
+
+# ── 9. MAIN CONTENT ROUTER ───────────────────────────────────
+# Show appropriate section based on sidebar radio selection
+
+if uploaded_file is None:
+    # ── No file yet: show upload prompt ──
+    st.info("👈  Please upload the JEE dataset CSV from the sidebar to get started.")
+    st.markdown("""
+    <div class="explain-box">
+    <b>Expected columns:</b> Year · Marks · Percentile · Rank · Total_Candidates
     </div>
     """, unsafe_allow_html=True)
-
-with c2:
-    st.markdown(f"""
-    <div class="pred-card cyan">
-        <div class="pred-label cyan">Polynomial Model</div>
-        <div class="pred-value">{poly_pred:,}</div>
-        <div class="pred-sub">Degree-3 Prediction</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c3:
-    st.markdown(f"""
-    <div class="pred-card emerald">
-        <div class="pred-label emerald">Percentile</div>
-        <div class="pred-value">{pct_pred:.2f}%</div>
-        <div class="pred-sub">Rank ≈ {rank_from_pct:,}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with c4:
-    st.markdown(f"""
-    <div class="pred-card rose">
-        <div class="pred-label rose">Ensemble Average</div>
-        <div class="pred-value">{avg_rank:,}</div>
-        <div class="pred-sub">Mean of All Models</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.stop()                           # Halt execution — nothing else renders
 
 
-# ─────────────────────────────────────────────
-# TABS: Analytics, Model Perf, Data Explorer
-# ─────────────────────────────────────────────
-st.markdown("<br>", unsafe_allow_html=True)
-
-tab1, tab2, tab3 = st.tabs(["📈 Visual Analytics", "🧮 Model Performance", "🔍 Data Explorer"])
+# ── 10. LOAD DATA ────────────────────────────────────────────
+df = load_data(uploaded_file)           # Read CSV into a Pandas DataFrame
 
 
-# ──── TAB 1: Visual Analytics ────
-with tab1:
-    st.markdown("<br>", unsafe_allow_html=True)
+# ── 11. OVERVIEW PAGE ────────────────────────────────────────
+if page == "🏠 Overview":
+    st.markdown('<div class="section-head">Dataset Overview</div>', unsafe_allow_html=True)
 
-    viz_col1, viz_col2 = st.columns(2)
+    # Shape info
+    rows, cols = df.shape
+    c1, c2, c3, c4 = st.columns(4)
 
-    with viz_col1:
-        # Marks vs Rank scatter (filtered by year range)
-        year_data = clean_data[clean_data['year'].between(year - 2, year + 2)]
-        if len(year_data) == 0:
-            year_data = clean_data
+    # Display quick summary metrics using HTML cards
+    with c1:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{rows:,}</div>'
+                    f'<div class="metric-label">Total Records</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{cols}</div>'
+                    f'<div class="metric-label">Columns</div></div>', unsafe_allow_html=True)
+    with c3:
+        nulls = int(df.isnull().sum().sum())
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{nulls}</div>'
+                    f'<div class="metric-label">Missing Values</div></div>', unsafe_allow_html=True)
+    with c4:
+        dups = int(df.duplicated().sum())
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{dups}</div>'
+                    f'<div class="metric-label">Duplicate Rows</div></div>', unsafe_allow_html=True)
 
-        fig_scatter = go.Figure()
+    st.markdown('<div class="section-head">Raw Data Preview</div>', unsafe_allow_html=True)
+    st.dataframe(df.head(20), use_container_width=True)   # Interactive scrollable table
 
-        fig_scatter.add_trace(go.Scatter(
-            x=year_data['marks'],
-            y=year_data['rank'],
-            mode='markers',
-            marker=dict(
-                size=6,
-                color=year_data['percentile'],
-                colorscale=[[0, '#f43f5e'], [0.5, '#8b5cf6'], [1, '#06b6d4']],
-                opacity=0.6,
-                line=dict(width=0),
-                colorbar=dict(
-                    title=dict(text="Pctl", font=dict(color='#8b8b9e', size=11)),
-                    tickfont=dict(color='#8b8b9e', size=10),
-                    bgcolor='rgba(0,0,0,0)',
-                    borderwidth=0,
-                )
-            ),
-            name='Historical Data',
-            hovertemplate='<b>Marks:</b> %{x}<br><b>Rank:</b> %{y:,}<extra></extra>'
-        ))
+    st.markdown('<div class="section-head">Descriptive Statistics</div>', unsafe_allow_html=True)
+    st.dataframe(df.describe(), use_container_width=True)  # count/mean/std/min/quartiles/max
 
-        # Highlight user's prediction
-        fig_scatter.add_trace(go.Scatter(
-            x=[marks],
-            y=[avg_rank],
-            mode='markers+text',
-            marker=dict(size=16, color='#f59e0b', symbol='diamond',
-                        line=dict(width=2, color='#fbbf24')),
-            text=['You'],
-            textposition='top center',
-            textfont=dict(color='#f59e0b', size=12, family='Inter'),
-            name='Your Prediction',
-            hovertemplate='<b>Your Marks:</b> %{x}<br><b>Predicted Rank:</b> %{y:,}<extra></extra>'
-        ))
 
-        fig_scatter.update_layout(
-            title=dict(text='Marks vs Rank Distribution', font=dict(size=16, color='#f0f0f5', family='Inter'), x=0),
-            xaxis=dict(title='Marks', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)',
-                       zerolinecolor='rgba(255,255,255,0.06)'),
-            yaxis=dict(title='Rank', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)',
-                       zerolinecolor='rgba(255,255,255,0.06)', autorange='reversed'),
-            plot_bgcolor='rgba(12,12,20,0.8)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(family='Inter', color='#8b8b9e'),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
-                        font=dict(size=11, color='#8b8b9e'), bgcolor='rgba(0,0,0,0)'),
-            margin=dict(l=50, r=30, t=60, b=50),
-            height=420,
+# ── 12. EDA PAGE ─────────────────────────────────────────────
+elif page == "📊 EDA":
+    st.markdown('<div class="section-head">Exploratory Data Analysis</div>', unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["📈 Distributions", "🔗 Relationships", "🌡 Correlations"])
+
+    with tab1:
+        st.markdown("#### Percentile Distribution")
+        st.markdown('<div class="explain-box">Percentile is left-skewed: most candidates cluster in the 80–100 range, '
+                    'creating a long left tail toward lower values.</div>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            # Plotly histogram with 50 bins; nbins controls granularity
+            fig = px.histogram(df, x='Percentile', nbins=50,
+                               title='Percentile Histogram',
+                               color_discrete_sequence=['#FF6B35'])
+            fig.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            # Interactive box plot — shows median, IQR, and outliers
+            fig2 = px.box(df, x='Percentile', title='Percentile Boxplot',
+                          color_discrete_sequence=['#F7C59F'])
+            fig2.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig2, use_container_width=True)
+
+        st.markdown("#### Marks Distribution")
+        fig3 = px.box(df, x='Marks', title='Marks Boxplot',
+                      color_discrete_sequence=['#EFEFD0'])
+        fig3.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig3, use_container_width=True)
+
+        st.markdown("#### Rank Distribution (Right-Skewed)")
+        st.markdown('<div class="explain-box">Rank is heavily right-skewed — most students bunch at lower ranks while '
+                    'a long tail extends to high rank numbers. That is why the model uses log1p(Rank) as the target.</div>',
+                    unsafe_allow_html=True)
+        fig4 = px.histogram(df, x='Rank', nbins=50, title='Rank Histogram',
+                            color_discrete_sequence=['#a29bfe'])
+        fig4.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig4, use_container_width=True)
+
+    with tab2:
+        st.markdown("#### Marks vs Year (Violin Plot)")
+        st.markdown('<div class="explain-box">Width of each violin = density of students at that mark value. '
+                    'Box inside shows median and IQR. Year-by-year consistency validates the dataset.</div>',
+                    unsafe_allow_html=True)
+        # Violin plot reveals distribution shape and density simultaneously
+        fig5 = px.violin(df, x="Year", y="Marks", box=True, color="Year",
+                         title="Marks Distribution per Year")
+        fig5.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                           showlegend=False)
+        st.plotly_chart(fig5, use_container_width=True)
+
+        st.markdown("#### Rank vs Total Candidates")
+        st.markdown('<div class="explain-box">Vertical clustering = fixed candidates per year. '
+                    'As total candidates grow, max possible rank also grows — same marks yield a worse rank in a bigger pool.</div>',
+                    unsafe_allow_html=True)
+        fig6 = px.scatter(df, x='Total_Candidates', y='Rank',
+                          color='Marks', title='Rank vs Total Candidates (coloured by Marks)',
+                          color_continuous_scale='Oranges')
+        fig6.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig6, use_container_width=True)
+
+        st.markdown("#### Rank vs Marks")
+        st.markdown('<div class="explain-box">Non-linear inverse relationship: at high marks a 5-mark gain '
+                    'dramatically improves rank; at low marks the same gain barely changes rank (high student density zone).</div>',
+                    unsafe_allow_html=True)
+        fig7 = px.scatter(df, x='Rank', y='Marks', color='Percentile',
+                          title='Rank vs Marks (coloured by Percentile)',
+                          color_continuous_scale='RdYlGn')
+        fig7.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig7, use_container_width=True)
+
+    with tab3:
+        st.markdown("#### Full Correlation Heatmap")
+        st.markdown('<div class="explain-box">Marks and Percentile are almost perfectly correlated (≈0.99), '
+                    'confirming they carry the same information — only one is needed as a feature.</div>',
+                    unsafe_allow_html=True)
+        # Seaborn heatmap rendered via matplotlib figure embedded in Streamlit
+        fig8, ax = plt.subplots(figsize=(7, 5))
+        numeric_df = df.select_dtypes(include=[np.number])  # Drop non-numeric cols
+        sns.heatmap(numeric_df.corr(), annot=True, fmt=".2f", cmap='coolwarm', ax=ax)
+        ax.set_facecolor('#0d0d1f')
+        fig8.patch.set_facecolor('#0d0d1f')
+        plt.xticks(color='white'); plt.yticks(color='white')
+        st.pyplot(fig8)
+
+
+# ── 13. MODELS PAGE ──────────────────────────────────────────
+elif page == "🤖 Models":
+    st.markdown('<div class="section-head">Training Models…</div>', unsafe_allow_html=True)
+
+    with st.spinner("Training all models (this may take ~30 seconds)…"):
+        results = train_models(df)       # Calls the cached training function
+
+    st.success("✅ All models trained successfully!")
+
+    st.markdown('<div class="section-head">Regression Model Comparison</div>', unsafe_allow_html=True)
+    st.markdown('<div class="explain-box">'
+                '<b>Polynomial LR:</b> adds x², x³ interaction terms for non-linear fits. '
+                '<b>Random Forest:</b> ensemble of 300 trees; robust to outliers and skewness '
+                'because each tree splits locally rather than minimising global squared error.'
+                '</div>', unsafe_allow_html=True)
+    # Highlight highest R² in green using Pandas Styler
+    st.dataframe(
+        results["reg_comparison"].style.highlight_max(
+            subset=["R² Score", "Adj R²"], color="#2d5a27"
+        ).highlight_min(subset=["MAE", "RMSE"], color="#2d5a27"),
+        use_container_width=True
+    )
+
+    st.markdown('<div class="section-head">Classification Model Comparison</div>', unsafe_allow_html=True)
+    st.markdown('<div class="explain-box">'
+                'SMOTE was applied before training to balance rare elite-tier samples. '
+                'XGBoost generally outperforms SVM and RF on tabular data with non-linear boundaries.'
+                '</div>', unsafe_allow_html=True)
+    st.dataframe(
+        results["clf_comparison"].style.highlight_max(
+            subset=["Accuracy"], color="#2d5a27"
+        ),
+        use_container_width=True
+    )
+
+    st.markdown('<div class="section-head">Actual vs Predicted Rank (Random Forest)</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="explain-box">Points near the diagonal = accurate predictions. '
+                'Scatter at high ranks is expected because fewer training samples exist in the tail.</div>',
+                unsafe_allow_html=True)
+
+    y_test  = results["y_test"]
+    y_pred  = results["y_rf_pred"]
+
+    # Build scatter comparing actual vs predicted ranks
+    fig_ap = px.scatter(
+        x=y_test, y=y_pred,
+        labels={"x": "Actual Rank", "y": "Predicted Rank"},
+        title="Actual vs Predicted Rank",
+        opacity=0.5,
+        color_discrete_sequence=['#FF6B35']
+    )
+    # Perfect-prediction reference line
+    max_val = max(y_test.max(), y_pred.max())
+    fig_ap.add_shape(type='line', x0=0, y0=0, x1=max_val, y1=max_val,
+                     line=dict(color='white', dash='dash'))
+    fig_ap.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig_ap, use_container_width=True)
+
+
+# ── 14. RESULTS / PREDICTION PAGE ───────────────────────────
+elif page == "🏆 Results":
+    st.markdown('<div class="section-head">Live Rank Predictor</div>', unsafe_allow_html=True)
+    st.info("Set your marks, year, and candidate count in the sidebar, then press **🚀 Predict My Rank**.")
+
+    if predict_btn:
+        with st.spinner("Training models and predicting…"):
+            results = train_models(df)   # Uses cached models after first run
+
+        sc     = results["sc_reg"]       # Scaler fitted on regression training set
+        rf_reg = results["rf_reg"]       # Trained Random Forest Regressor
+        xgb    = results["xgb"]          # Trained XGBoost Classifier
+        sc_clf = results["sc_clf"]       # Scaler fitted on classification training set
+        encoder= results["encoder"]      # LabelEncoder to decode category integers
+
+        # ── Regression Prediction ──────────────────────────────
+        X_new = [[input_year, input_marks, input_candidates]]
+        X_new_sc = sc.transform(X_new)          # Scale with the same fitted scaler
+
+        log_pred = rf_reg.predict(X_new_sc)[0]  # Model outputs log1p(Rank)
+        rank_pred = int(np.expm1(log_pred))      # Convert back: expm1 = exp(x) - 1
+
+        # Per-tree predictions to build confidence interval
+        tree_preds = np.array([
+            tree.predict(X_new_sc)[0] for tree in rf_reg.estimators_
+        ])
+        rank_lower = int(np.expm1(np.percentile(tree_preds, 10)))
+        rank_upper = int(np.expm1(np.percentile(tree_preds, 90)))
+
+        # ── Classification Prediction ──────────────────────────
+        # Classification uses Year + Marks + Rank (predicted) as features
+        X_clf = [[input_year, input_marks, rank_pred]]
+        X_clf_sc = sc_clf.transform(X_clf)
+        cat_enc  = xgb.predict(X_clf_sc)[0]                  # Integer label
+        category = encoder.inverse_transform([cat_enc])[0]   # Human-readable tier
+
+        # ── Display result ─────────────────────────────────────
+        st.markdown(f"""
+        <div class="result-box">
+            <div style="color:#aaa; font-size:0.9rem; margin-bottom:8px;">Predicted JEE Rank</div>
+            <div class="result-rank">{rank_pred:,}</div>
+            <div class="result-range">📊 Confidence Range: {rank_lower:,} – {rank_upper:,}</div>
+            <div class="result-category">{category}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Supporting metrics columns ─────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            percentile_approx = round((1 - rank_pred / input_candidates) * 100, 2)
+            st.metric("Approx. Percentile", f"{percentile_approx}%")
+        with m2:
+            st.metric("Rank Range Width",
+                      f"{rank_upper - rank_lower:,}")
+        with m3:
+            ratio = rank_pred / input_candidates
+            st.metric("Rank Ratio", f"{ratio:.4f}")
+
+        # ── Gauge chart for Rank Ratio ─────────────────────────
+        st.markdown('<div class="section-head">Rank Ratio Gauge</div>', unsafe_allow_html=True)
+        st.markdown('<div class="explain-box">Rank Ratio = Your Rank / Total Candidates. '
+                    'Closer to 0 → better. Elite tier is ≤ 0.005.</div>', unsafe_allow_html=True)
+
+        fig_gauge = px.bar(
+            x=["Your Ratio", "Elite Cutoff", "Top Tier", "Competitive"],
+            y=[ratio, 0.005, 0.02, 0.10],
+            color=["Your Ratio", "Elite Cutoff", "Top Tier", "Competitive"],
+            color_discrete_map={
+                "Your Ratio": "#FF6B35",
+                "Elite Cutoff": "#00b894",
+                "Top Tier": "#0984e3",
+                "Competitive": "#636e72"
+            },
+            title="Your Rank Ratio vs Category Thresholds"
         )
-
-        st.plotly_chart(fig_scatter, use_container_width=True)
-
-    with viz_col2:
-        # Model comparison gauge-like chart
-        models_df = pd.DataFrame({
-            'Model': ['Linear', 'Polynomial', 'Percentile', 'Ensemble'],
-            'Predicted Rank': [lin_pred, poly_pred, rank_from_pct, avg_rank],
-            'Color': ['#6366f1', '#06b6d4', '#10b981', '#f43f5e']
-        })
-
-        fig_bar = go.Figure()
-
-        for _, row in models_df.iterrows():
-            fig_bar.add_trace(go.Bar(
-                x=[row['Predicted Rank']],
-                y=[row['Model']],
-                orientation='h',
-                marker=dict(
-                    color=row['Color'],
-                    line=dict(width=0),
-                    opacity=0.85
-                ),
-                text=f"  {row['Predicted Rank']:,}",
-                textposition='outside',
-                textfont=dict(color=row['Color'], size=13, family='JetBrains Mono'),
-                name=row['Model'],
-                showlegend=False,
-                hovertemplate=f"<b>{row['Model']}</b><br>Rank: {row['Predicted Rank']:,}<extra></extra>"
-            ))
-
-        fig_bar.update_layout(
-            title=dict(text='Model Predictions Comparison', font=dict(size=16, color='#f0f0f5', family='Inter'), x=0),
-            xaxis=dict(title='Predicted Rank', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)',
-                       zerolinecolor='rgba(255,255,255,0.06)'),
-            yaxis=dict(color='#8b8b9e', categoryorder='array',
-                       categoryarray=['Ensemble', 'Percentile', 'Polynomial', 'Linear']),
-            plot_bgcolor='rgba(12,12,20,0.8)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(family='Inter', color='#8b8b9e'),
-            margin=dict(l=100, r=80, t=60, b=50),
-            height=420,
-            bargap=0.35,
-        )
-
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    # Second row of charts
-    st.markdown("<br>", unsafe_allow_html=True)
-    viz_col3, viz_col4 = st.columns(2)
-
-    with viz_col3:
-        # Percentile Gauge
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=pct_pred,
-            number=dict(
-                font=dict(size=42, color='#f0f0f5', family='JetBrains Mono'),
-                suffix='%'
-            ),
-            delta=dict(reference=90, increasing=dict(color='#10b981'), decreasing=dict(color='#f43f5e')),
-            gauge=dict(
-                axis=dict(range=[0, 100], tickwidth=1, tickcolor='#5a5a6e',
-                          tickfont=dict(color='#5a5a6e', size=10)),
-                bar=dict(color='#6366f1', thickness=0.3),
-                bgcolor='rgba(255,255,255,0.03)',
-                borderwidth=0,
-                steps=[
-                    dict(range=[0, 50], color='rgba(244,63,94,0.1)'),
-                    dict(range=[50, 80], color='rgba(245,158,11,0.1)'),
-                    dict(range=[80, 95], color='rgba(6,182,212,0.1)'),
-                    dict(range=[95, 100], color='rgba(16,185,129,0.1)'),
-                ],
-                threshold=dict(
-                    line=dict(color='#f59e0b', width=3),
-                    thickness=0.8,
-                    value=pct_pred
-                ),
-            ),
-            title=dict(text='Your Percentile Score', font=dict(size=14, color='#8b8b9e')),
-        ))
-
-        fig_gauge.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(family='Inter', color='#8b8b9e'),
-            margin=dict(l=30, r=30, t=80, b=30),
-            height=350,
-        )
-
+        fig_gauge.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                                showlegend=False)
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    with viz_col4:
-        # Year-wise trend for the given marks
-        marks_range = clean_data[(clean_data['marks'].between(marks - 5, marks + 5))]
-        trend = marks_range.groupby('year').agg(
-            avg_rank=('rank', 'mean'),
-            avg_pct=('percentile', 'mean')
-        ).reset_index()
 
-        if len(trend) > 0:
-            fig_trend = go.Figure()
-
-            fig_trend.add_trace(go.Scatter(
-                x=trend['year'],
-                y=trend['avg_rank'],
-                mode='lines+markers',
-                line=dict(color='#8b5cf6', width=3, shape='spline'),
-                marker=dict(size=8, color='#8b5cf6', line=dict(width=2, color='#a78bfa')),
-                fill='tozeroy',
-                fillcolor='rgba(139,92,246,0.08)',
-                name='Avg Rank',
-                hovertemplate='<b>Year:</b> %{x}<br><b>Avg Rank:</b> %{y:,.0f}<extra></extra>'
-            ))
-
-            fig_trend.update_layout(
-                title=dict(text=f'Rank Trend for ~{marks} Marks (±5)', font=dict(size=16, color='#f0f0f5', family='Inter'), x=0),
-                xaxis=dict(title='Year', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)',
-                           dtick=1, zerolinecolor='rgba(255,255,255,0.06)'),
-                yaxis=dict(title='Average Rank', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)',
-                           zerolinecolor='rgba(255,255,255,0.06)', autorange='reversed'),
-                plot_bgcolor='rgba(12,12,20,0.8)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(family='Inter', color='#8b8b9e'),
-                margin=dict(l=50, r=30, t=60, b=50),
-                height=350,
-                showlegend=False,
-            )
-
-            st.plotly_chart(fig_trend, use_container_width=True)
-        else:
-            st.info("Not enough data for this marks range to show trend.")
-
-
-# ──── TAB 2: Model Performance ────
-with tab2:
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Performance Metric Bars
-    max_mae = max(metrics['lin_mae'], metrics['pol_mae']) * 1.1
-
-    st.markdown(f"""
-    <div class="metric-bar-container">
-        <div class="metric-bar-header">
-            <span class="metric-bar-label">🔵 Linear Regression — MAE</span>
-            <span class="metric-bar-value">{metrics['lin_mae']:,.0f}</span>
-        </div>
-        <div class="metric-bar-track">
-            <div class="metric-bar-fill indigo" style="width: {min(metrics['lin_mae']/max_mae*100, 100):.1f}%;"></div>
-        </div>
-    </div>
-
-    <div class="metric-bar-container">
-        <div class="metric-bar-header">
-            <span class="metric-bar-label">🟣 Polynomial Regression — MAE</span>
-            <span class="metric-bar-value">{metrics['pol_mae']:,.0f}</span>
-        </div>
-        <div class="metric-bar-track">
-            <div class="metric-bar-fill cyan" style="width: {min(metrics['pol_mae']/max_mae*100, 100):.1f}%;"></div>
-        </div>
-    </div>
-
-    <div class="metric-bar-container">
-        <div class="metric-bar-header">
-            <span class="metric-bar-label">🟢 Percentile Model — MAE</span>
-            <span class="metric-bar-value">{metrics['pct_mae']:.2f}</span>
-        </div>
-        <div class="metric-bar-track">
-            <div class="metric-bar-fill emerald" style="width: {min(metrics['pct_mae']/10*100, 100):.1f}%;"></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # R² Score cards
-    r2_col1, r2_col2, r2_col3 = st.columns(3)
-
-    with r2_col1:
-        r2_pct_lin = max(0, metrics['lin_r2'] * 100)
-        st.markdown(f"""
-        <div class="pred-card indigo" style="text-align: center;">
-            <div class="pred-label indigo">Linear R² Score</div>
-            <div class="pred-value">{metrics['lin_r2']:.4f}</div>
-            <div class="pred-sub">Variance Explained: {r2_pct_lin:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with r2_col2:
-        r2_pct_pol = max(0, metrics['pol_r2'] * 100)
-        st.markdown(f"""
-        <div class="pred-card cyan" style="text-align: center;">
-            <div class="pred-label cyan">Polynomial R² Score</div>
-            <div class="pred-value">{metrics['pol_r2']:.4f}</div>
-            <div class="pred-sub">Variance Explained: {r2_pct_pol:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with r2_col3:
-        r2_pct_pct = max(0, metrics['pct_r2'] * 100)
-        st.markdown(f"""
-        <div class="pred-card emerald" style="text-align: center;">
-            <div class="pred-label emerald">Percentile R² Score</div>
-            <div class="pred-value">{metrics['pct_r2']:.4f}</div>
-            <div class="pred-sub">Variance Explained: {r2_pct_pct:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Residuals visualization
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    @st.cache_data
-    def get_residuals(_data, _feature_cols):
-        clean = _data.copy()
-        clean = clean[clean['rank'] > 0]
-        clean['log_rank'] = np.log1p(clean['rank'])
-
-        if 'percentile' not in clean.columns:
-            clean['percentile'] = 100 * (1 - clean['rank'] / clean['rank'].max())
-
-        X = clean[_feature_cols]
-        y_raw = clean['rank']
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y_raw, test_size=0.2, random_state=42)
-
-        y_log_train = np.log1p(y_train)
-
-        lin = LinearRegression().fit(X_train, y_log_train)
-        lin_pred = np.expm1(lin.predict(X_test))
-        lin_residuals = y_test - lin_pred
-
-        return y_test, lin_pred, lin_residuals
-
-    y_test, y_pred, residuals = get_residuals(df, feature_cols)
-
-    fig_residuals = go.Figure()
-
-    fig_residuals.add_trace(go.Scatter(
-        x=y_pred,
-        y=residuals,
-        mode='markers',
-        marker=dict(
-            size=5,
-            color=residuals,
-            colorscale=[[0, '#f43f5e'], [0.5, '#5a5a6e'], [1, '#06b6d4']],
-            opacity=0.5,
-            showscale=False,
-        ),
-        hovertemplate='<b>Predicted:</b> %{x:,.0f}<br><b>Residual:</b> %{y:,.0f}<extra></extra>'
-    ))
-
-    fig_residuals.add_hline(y=0, line_dash="dash", line_color="rgba(99, 102, 241, 0.5)", line_width=1)
-
-    fig_residuals.update_layout(
-        title=dict(text='Residuals Plot (Linear Model)', font=dict(size=16, color='#f0f0f5', family='Inter'), x=0),
-        xaxis=dict(title='Predicted Rank', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)'),
-        yaxis=dict(title='Residual (Actual − Predicted)', color='#8b8b9e', gridcolor='rgba(255,255,255,0.04)'),
-        plot_bgcolor='rgba(12,12,20,0.8)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(family='Inter', color='#8b8b9e'),
-        margin=dict(l=60, r=30, t=60, b=50),
-        height=400,
-        showlegend=False,
-    )
-
-    st.plotly_chart(fig_residuals, use_container_width=True)
-
-
-# ──── TAB 3: Data Explorer ────
-with tab3:
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    exp_col1, exp_col2 = st.columns([1, 2])
-
-    with exp_col1:
-        selected_year = st.selectbox("Select Year", sorted(clean_data['year'].unique(), reverse=True), index=0)
-        marks_range = st.slider("Marks Range", 0, 300, (50, 250))
-
-    with exp_col2:
-        filtered = clean_data[
-            (clean_data['year'] == selected_year) &
-            (clean_data['marks'].between(marks_range[0], marks_range[1]))
-        ].sort_values('marks', ascending=False)
-
-        st.markdown(f"""
-        <div style="color: #8b8b9e; font-size: 0.85rem; margin-bottom: 0.5rem;">
-            Showing <strong style="color: #a5b4fc;">{len(filtered)}</strong> records for year <strong style="color: #a5b4fc;">{selected_year}</strong>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.dataframe(
-            filtered[['marks', 'percentile', 'rank', 'total_candidates']].reset_index(drop=True),
-            use_container_width=True,
-            height=400,
-        )
-
-    # Heatmap: average rank by marks bucket and year
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    heat_data = clean_data.copy()
-    heat_data['marks_bucket'] = pd.cut(heat_data['marks'], bins=range(0, 310, 30),
-                                        labels=[f"{i}-{i+29}" for i in range(0, 300, 30)])
-    heatmap_df = heat_data.groupby(['marks_bucket', 'year'])['rank'].mean().unstack(fill_value=0)
-
-    fig_heat = go.Figure(data=go.Heatmap(
-        z=np.log1p(heatmap_df.values),
-        x=heatmap_df.columns.astype(str),
-        y=[str(b) for b in heatmap_df.index],
-        colorscale=[[0, '#0a0a0f'], [0.2, '#1e1b4b'], [0.4, '#4338ca'], [0.6, '#6366f1'],
-                     [0.8, '#a78bfa'], [1.0, '#e0e7ff']],
-        hovertemplate='<b>Marks:</b> %{y}<br><b>Year:</b> %{x}<br><b>Log Avg Rank:</b> %{z:.1f}<extra></extra>',
-        colorbar=dict(title=dict(text='Log(Rank)', font=dict(color='#8b8b9e')),
-                      tickfont=dict(color='#8b8b9e'), bgcolor='rgba(0,0,0,0)', borderwidth=0),
-    ))
-
-    fig_heat.update_layout(
-        title=dict(text='Average Rank Heatmap (Log Scale)', font=dict(size=16, color='#f0f0f5', family='Inter'), x=0),
-        xaxis=dict(title='Year', color='#8b8b9e'),
-        yaxis=dict(title='Marks Range', color='#8b8b9e', autorange='reversed'),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(family='Inter', color='#8b8b9e'),
-        margin=dict(l=80, r=30, t=60, b=50),
-        height=450,
-    )
-
-    st.plotly_chart(fig_heat, use_container_width=True)
-
-
-# ─────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────
+# ── 15. FOOTER ───────────────────────────────────────────────
 st.markdown("""
-<div class="footer">
-    <div style="margin-bottom: 0.5rem;">
-        Built with ❤️ using <strong>Streamlit</strong> & <strong>Scikit-Learn</strong>
-    </div>
-    <div>
-        Data: JEE Main Results (2009–2026) · Models: Linear, Polynomial, Percentile Regression
-    </div>
+<hr style="border-color:#2a2a4a; margin-top:3rem;">
+<div style="text-align:center; color:#555; font-size:0.8rem; padding-bottom:1rem;">
+    JEE Rank Predictor · Built with Streamlit · Models: Random Forest · XGBoost · SVM · Poly-LR
 </div>
 """, unsafe_allow_html=True)
