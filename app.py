@@ -252,15 +252,18 @@ if page == "🏠 Home & Predict":
         upper = int(np.expm1(np.percentile(tree_preds, 90)))
 
       
-       # Classification prediction (using a DataFrame to ensure feature names match)
-        
-        # Ensure the columns match the exact names used in X2 during training
-        input_df_clf = pd.DataFrame([[year, marks]], columns=['Year', 'Marks'])
-        
-        # Apply scaling and predict
-        X_new2 = sc2.transform(input_df_clf)
-        cat_encoded = xgb.predict(X_new2)[0]
-        category = enc.inverse_transform([cat_encoded])[0]
+     # Classification prediction
+# Ensure the columns match the exact names used in X2 during training
+input_df_clf = pd.DataFrame([[year, marks]], columns=['Year', 'Marks'])
+
+# Apply scaling and predict
+X_new2 = sc2.transform(input_df_clf)
+
+# XGBoost sometimes returns float or numpy type → convert to int
+cat_encoded = int(xgb.predict(X_new2)[0])
+
+# Ensure encoder input shape is correct
+category = enc.inverse_transform([cat_encoded])[0]
 
         st.markdown("---")
         r1, r2, r3 = st.columns([2, 1.5, 1.5])
