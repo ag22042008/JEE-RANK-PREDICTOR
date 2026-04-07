@@ -264,7 +264,6 @@ cat_encoded = int(xgb.predict(X_new2)[0])
 
 # Ensure encoder input shape is correct
 category = enc.inverse_transform([cat_encoded])[0]
-
         st.markdown("---")
         r1, r2, r3 = st.columns([2, 1.5, 1.5])
         with r1:
