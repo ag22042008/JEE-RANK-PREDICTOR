@@ -179,8 +179,7 @@ def train_models(df):
 
 
 # ── Sidebar navigation ────────────────────────────────────────────────────────
-st.sidebar.image("....",
-                 width=100, use_container_width=False)
+st.sidebar.image("CP-School-61.png", width=100, use_container_width=False)
 st.sidebar.title("🎯 JEE Rank Predictor")
 st.sidebar.markdown("---")
 
