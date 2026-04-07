@@ -251,8 +251,10 @@ if page == "🏠 Home & Predict":
         lower = int(np.expm1(np.percentile(tree_preds, 10)))
         upper = int(np.expm1(np.percentile(tree_preds, 90)))
 
-        # Classification prediction
-        X_new2     = sc2.transform([[year, marks]])
+      
+       # Classification prediction (using a DataFrame to ensure feature names match)
+    input_df_clf = pd.DataFrame([[year, marks]], columns=['Year', 'Marks'])
+      X_new2 = sc2.transform(input_df_clf)
         cat_encoded = xgb.predict(X_new2)[0]
         category    = enc.inverse_transform([cat_encoded])[0]
 
