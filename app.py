@@ -253,8 +253,8 @@ if page == "🏠 Home & Predict":
 
       
        # Classification prediction (using a DataFrame to ensure feature names match)
-    input_df_clf = pd.DataFrame([[year, marks]], columns=['Year', 'Marks'])
-      X_new2 = sc2.transform(input_df_clf)
+        input_df_clf = pd.DataFrame([[year, marks]], columns=['Year', 'Marks'])
+        X_new2 = sc2.transform(input_df_clf)
         cat_encoded = xgb.predict(X_new2)[0]
         category    = enc.inverse_transform([cat_encoded])[0]
 
